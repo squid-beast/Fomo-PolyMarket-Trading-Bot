@@ -2,7 +2,7 @@
 """
 End-to-end: pull real traders, test whether their edge persists.
 
-  export FOMO_API_KEY=...
+  set -a; . ./.env; set +a      # FOMO_API_KEY lives in .env; only docker-compose auto-loads it
   python3 run_persistence.py --traders 100 --calls-per-trader 10
 
 Design note on SELECTION BIAS: traders are chosen from a leaderboard window,

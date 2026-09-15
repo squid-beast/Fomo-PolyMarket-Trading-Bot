@@ -1,79 +1,60 @@
+import { useEffect, useState } from "react";
 import { useLiveState } from "./useLiveState";
-import { Header } from "./components/Header";
+import type { State, View } from "./types";
+import { Sidebar, Header } from "./components/Header";
 import { Banners } from "./components/Banners";
 import { Tiles } from "./components/Tiles";
 import { Proposals } from "./components/Proposals";
 import { EquityChart } from "./components/EquityChart";
-import { Positions, Failures, Trades, FunnelView } from "./components/Tables";
+import { Positions, FunnelView, Trades, Failures } from "./components/Tables";
+import { TradeHistory } from "./components/TradeHistory";
+import { FomoAccount } from "./components/FomoAccount";
+import { percent } from "./format";
 
-function Section({ title, cap, children }:
-  { title: string; cap: string; children: React.ReactNode }) {
-  return (
-    <section>
-      <h2>{title}</h2>
-      <p className="cap">{cap}</p>
-      {children}
-    </section>
-  );
+function Section({ title, cap, children, className = "" }: { title: string; cap?: string; children: React.ReactNode; className?: string }) {
+  return <section className={className}><div className="section-heading"><div><h2>{title}</h2>{cap && <p className="cap">{cap}</p>}</div></div>{children}</section>;
+}
+function PageHeading({ eyebrow, title, copy }: { eyebrow: string; title: string; copy: string }) {
+  return <div className="page-heading"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{copy}</p></div></div>;
+}
+
+function ExitPlan({ state }: { state: State }) {
+  const e = state.configuration.exits;
+  const rows: [string, string, string][] = [["Take profit", percent(e.take_profit_pct), "Quoted price"], ["Stop loss", percent(e.stop_loss_pct == null ? null : -e.stop_loss_pct), "Quoted price"], ["Trailing stop", percent(e.trailing_stop_pct), "After the trail is armed"], ["Trail arms at", percent(e.trail_arm_pct), "Quoted price"], ["Maximum hold", e.max_hold_hours == null ? "—" : `${e.max_hold_hours}h`, "Time limit"]];
+  return <div className="plan-list">{rows.map(([label, value, note]) => <div className="plan-row" key={label}><span>{label}</span><strong>{value}</strong><small>{note}</small></div>)}<div className="plan-callout"><strong>Chart-based early exit</strong><span>Not implemented or validated yet. A pattern signal cannot guarantee that a large loss will be detected in time.</span></div></div>;
+}
+
+function Overview({ state, status, decide, navigate }: { state: State; status: Parameters<typeof Proposals>[0]["status"]; decide: (pid: string, action: "approve" | "reject") => Promise<void>; navigate: (view: View) => void }) {
+  return <><Banners state={state} status={status} openSetup={() => navigate("rules")} /><Tiles e={state.equity}/><div className="overview-grid"><Section title="Account curve" cap="Local equity snapshots. The account mode and settlement are not verified."><EquityChart points={state.equity_curve}/><p className="source-note">{state.account.equity_curve_scope}</p></Section><Section title="Exit plan" cap="Current configuration references; quoted-price triggers are not guaranteed net returns."><ExitPlan state={state}/></Section></div><Section title="Open positions" cap="Local position snapshot only. FOMO holdings are not connected."><Positions rows={state.positions} available={state.heartbeat_sec != null}/></Section><Section title="Failures" cap="A failed exit means the position is still open. These matter most."><Failures rows={state.failures}/></Section><Section title="Recent local trades" cap="Latest records from this workspace. Search the complete local history in Trade history."><Trades rows={state.trades}/><button className="text-button section-link" onClick={() => navigate("history")}>Open full trade history →</button></Section><Section title="Latest scan" cap="Legacy DexScreener scanner on Solana. This is separate from FOMO market data."><FunnelView f={state.funnel} rejections={state.rejections}/></Section><Section title="Review queue" cap="Approvals are blocked until a verified FOMO execution adapter exists."><Proposals items={state.proposals} onDecide={decide} status={status} generated={state.generated}/></Section></>;
+}
+
+function IntegrationPanel({ state, kind }: { state: State; kind: "market" | "copy" }) {
+  const i = state.integrations;
+  return <div className="integration-panel"><div className="integration-status"><span className="status-dot warn"/><div><strong>{kind === "copy" ? "Copy source not connected" : "FOMO feed not connected"}</strong><span>Provider: fomoapi.io · {i.research_provider_status}</span></div></div><div className="integration-facts"><div><span>Analytics key</span><b>Configured outside this UI</b></div><div><span>Account execution</span><b>Unavailable</b></div><div><span>Current executor</span><b>{i.executor} · {i.chain}</b></div></div><div className="integration-actions"><a href="https://fomoapi.io/dashboard" target="_blank" rel="noreferrer">Open provider dashboard ↗</a><a href="https://fomoapi.io/docs" target="_blank" rel="noreferrer">Read API reference ↗</a></div></div>;
+}
+function MarketView({ state, status, decide }: { state: State; status: Parameters<typeof Proposals>[0]["status"]; decide: (pid: string, action: "approve" | "reject") => Promise<void> }) {
+  return <><PageHeading eyebrow="Signal desk" title="Market analysis" copy="Keep FOMO activity and the legacy Solana scanner visible as separate sources."/><div className="source-banner"><div><span className="eyebrow">Current source</span><strong>Legacy DexScreener scan · Solana</strong><span>FOMO market feed is not connected to the daemon yet.</span></div><span className="badge">Research only</span></div><Section title="Scan funnel" cap="Safety and strategy stages from the latest local scan."><FunnelView f={state.funnel} rejections={state.rejections}/></Section><Section title="Candidates awaiting review" cap="Rationale and cost estimates are preserved. Approval is disabled while FOMO execution is unavailable."><Proposals items={state.proposals} onDecide={decide} status={status} generated={state.generated}/></Section><Section title="FOMO market data" cap="Your fomoapi.io key can provide trader and market data. This workspace has not wired that feed into the scanner."><IntegrationPanel state={state} kind="market"/></Section></>;
+}
+function CopyView({ state }: { state: State }) {
+  return <><PageHeading eyebrow="Signal desk" title="Copy trading" copy="Choose traders and review their evidence before a copy signal can reach the risk engine."/><div className="copy-layout"><Section title="FOMO trader source" cap="Separate from local proposals and local trade history."><IntegrationPanel state={state} kind="copy"/></Section><Section title="Copy controls" cap="These controls stay unavailable until the source and execution path are verified."><div className="disabled-controls"><div className="control-row"><div><strong>Selected traders</strong><span>No FOMO profiles connected</span></div><button disabled>Add trader</button></div><div className="control-row"><div><strong>Copy entries</strong><span>Requires a fresh FOMO signal and a measured edge</span></div><button disabled>Unavailable</button></div><div className="control-row"><div><strong>Copy exits</strong><span>Automatic exits must remain independent of approval</span></div><button disabled>Unavailable</button></div></div></Section></div><Section title="FOMO account lookup" cap="On-demand read of one handle from fomoapi.io. Nothing here is reconciled locally, and the provider cannot execute orders."><FomoAccount/></Section><Section title="What will be measured" cap="Before copy trading can be trusted, each source needs evidence that survives costs."><div className="evidence-grid"><div><b>Trader persistence</b><span>Out-of-sample win rate and expectancy across windows.</span></div><div><b>Entry delay</b><span>Price movement between the FOMO signal and our fill.</span></div><div><b>Liquidity</b><span>Whether your position can exit without breaking the risk limits.</span></div><div><b>Cost drag</b><span>Fees, slippage and failed transactions included in the result.</span></div></div></Section></>;
+}
+function RuleTable({ rows }: { rows: [string, string, string][] }) { return <div className="rule-list">{rows.map(([label, value, note]) => <div className="rule-row" key={label}><span>{label}</span><strong>{value}</strong><small>{note}</small></div>)}</div>; }
+function RulesView({ state }: { state: State }) {
+  const c = state.configuration;
+  return <><PageHeading eyebrow="Guardrails" title="Rules & setup" copy="Read-only snapshot of configured rules. Runtime overrides and daemon reload state are not verified here."/><div className="setup-warning"><strong>Trading is blocked in this workspace.</strong><span>Do not add credentials to the UI. Connect and verify an account executor before enabling any real order path.</span></div><div className="rules-grid"><Section title="Exit rules" cap="Existing settings retained until you choose new targets."><RuleTable rows={[["Take profit", percent(c.exits.take_profit_pct), "Quoted price"],["Stop loss", percent(c.exits.stop_loss_pct == null ? null : -c.exits.stop_loss_pct), "Quoted price"],["Trailing stop", percent(c.exits.trailing_stop_pct), "Quoted drawdown"],["Trail activation", percent(c.exits.trail_arm_pct), "Quoted gain"],["Maximum hold", c.exits.max_hold_hours == null ? "—" : `${c.exits.max_hold_hours} hours`, "Time limit"],["Liquidity collapse", percent(c.exits.liquidity_collapse_pct), "Configured trigger"]]}/></Section><Section title="Risk rules" cap="Hard gates remain in force for any future executor."><RuleTable rows={[["Position size", percent(c.risk.max_position_pct), "Maximum per entry"],["Total exposure", percent(c.risk.max_total_exposure_pct), "Portfolio cap"],["Open positions", c.risk.max_concurrent_positions == null ? "—" : String(c.risk.max_concurrent_positions), "Concurrency cap"],["Cash reserve", percent(c.risk.min_cash_reserve_pct), "Minimum retained"],["Daily loss", percent(c.risk.max_daily_loss_pct), "Circuit breaker"],["Minimum edge", percent(c.risk.min_expected_edge_pct), "Above estimated friction"],["Edge gate", c.risk.require_edge_gate ? "On" : "Off", "Validated edge required"]]}/></Section></div><Section title="Integration facts" cap="These facts explain what the current architecture can and cannot do."><div className="facts-list"><div><span>Market scanner</span><strong>{state.integrations.scanner}</strong></div><div><span>Executor</span><strong>{state.integrations.executor} on {state.integrations.chain}</strong></div><div><span>FOMO analytics</span><strong>fomoapi.io research access</strong></div><div><span>FOMO order placement</span><strong className="neg">Not documented or connected</strong></div><div><span>Chart-based early exit</span><strong>Not implemented</strong></div><div><span>Configuration editing</span><strong>Read-only in this panel</strong></div></div></Section></>;
 }
 
 export default function App() {
-  const { state, status, lastEventAt, decide } = useLiveState();
-
-  if (!state) {
-    return (
-      <>
-        <Header state={null} status={status} />
-        <div className="wrap">
-          <div className="empty" style={{ marginTop: 40 }}>
-            {status === "retrying"
-              ? "Cannot reach the server. Is the daemon running?"
-              : "Connecting to the live stream…"}
-          </div>
-        </div>
-      </>
-    );
-  }
-
-  return (
-    <>
-      <Header state={state} status={status} />
-      <div className="wrap">
-        <Banners state={state} status={status} />
-        <Tiles e={state.equity} />
-
-        <Section title="Pending approvals"
-          cap="Approving records a decision. The daemon re-checks risk before anything is signed.">
-          <Proposals items={state.proposals} onDecide={decide} />
-        </Section>
-
-        <Section title="Equity" cap="Account value after every cost. Hover for detail.">
-          <EquityChart points={state.equity_curve} />
-        </Section>
-
-        <Section title="Open positions" cap="Exits are automatic — these are managed without you.">
-          <Positions rows={state.positions} />
-        </Section>
-
-        <Section title="Failures"
-          cap="A failed exit means the position is still open. These matter most.">
-          <Failures rows={state.failures} />
-        </Section>
-
-        <Section title="Closed trades"
-          cap="Quoted move vs what was actually realised after friction.">
-          <Trades rows={state.trades} />
-        </Section>
-
-        <Section title="Latest scan"
-          cap="How many candidates survive each stage. Most scans should end in zero.">
-          <FunnelView f={state.funnel} rejections={state.rejections} />
-        </Section>
-
-        <p className="foot">
-          pushed {lastEventAt ? new Date(lastEventAt).toLocaleTimeString() : "—"} · live stream, not polling
-        </p>
-      </div>
-    </>
-  );
+  const { state, status, lastEventAt, decide, retry } = useLiveState();
+  const [view, setView] = useState<View>(() => { const hash = window.location.hash.slice(1) as View; return ["overview", "market", "copy", "history", "rules"].includes(hash) ? hash : "overview"; });
+  useEffect(() => { const onHash = () => { const next = window.location.hash.slice(1) as View; if (["overview", "market", "copy", "history", "rules"].includes(next)) setView(next); }; window.addEventListener("hashchange", onHash); return () => window.removeEventListener("hashchange", onHash); }, []);
+  const navigate = (next: View) => { window.location.hash = next; setView(next); };
+  let content: React.ReactNode;
+  if (!state) content = <div className="loading-state"><div className="loading-ring"/><strong>{status === "retrying" ? "Local feed unavailable" : "Connecting to local feed"}</strong><span>{status === "retrying" ? "The dashboard will reconnect automatically." : "Waiting for the first state snapshot."}</span>{status === "retrying" && <button onClick={retry}>Retry now</button>}</div>;
+  else if (view === "overview") content = <Overview state={state} status={status} decide={decide} navigate={navigate}/>;
+  else if (view === "market") content = <MarketView state={state} status={status} decide={decide}/>;
+  else if (view === "copy") content = <CopyView state={state}/>;
+  else if (view === "history") content = <TradeHistory/>;
+  else content = <RulesView state={state}/>;
+  return <div className="app-shell"><Sidebar view={view} navigate={navigate}/><div className="main-column"><Header view={view} status={status} lastEventAt={lastEventAt} state={state}/><main className="wrap">{content}<p className="foot">Local dashboard stream · {lastEventAt ? `updated ${new Date(lastEventAt).toLocaleTimeString()}` : "waiting for update"}</p></main></div></div>;
 }

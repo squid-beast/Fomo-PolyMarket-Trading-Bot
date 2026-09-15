@@ -1,0 +1,54 @@
+# CODEOWNERS — who must review what.
+#
+# Every path listed here can lose real money, either by moving it or by hiding
+# that it moved. GitHub requires a review from the listed owner on any PR that
+# touches them, provided "Require review from Code Owners" is enabled in the
+# branch protection rule for main. Without that setting this file is only a
+# suggestion, so turn it on (see the gh api command in the PR that added this).
+#
+# Deliberately NOT listed: ct/strategies/, research/, web/, tests/, docs. A bad
+# strategy scores badly and the risk engine still refuses it; a bad chart is
+# embarrassing, not expensive. Owning everything means reading nothing.
+
+# The hard gate. Sizing, exposure caps, the cash floor and the edge gate all
+# live here, and every entry in the system goes through evaluate(). A one-line
+# change here can approve a trade the research says loses money.
+# Non-negotiables #1, #2, #4.
+/ct/risk.py                       @Squid-Beast
+
+# Binary reject gates, run before any scoring. Deleting one gate is a one-line
+# diff that silently widens what the system is willing to buy.
+# Non-negotiable #1 (nothing upstream may override the gate chain).
+/ct/safety.py                     @Squid-Beast
+
+# The append-only hash-chained audit trail. It is the only record of what
+# actually happened; if it can be edited, nothing else in the repo is evidence.
+# Non-negotiables #5, #6, #8.
+/ct/ledger.py                     @Squid-Beast
+
+# Signs and sends real Solana transactions and decides whether a send confirmed.
+# An optimistic confirm() means the system believes it holds something it does
+# not, and every later decision rests on that.
+# Non-negotiables #6, #7.
+/app/executor.py                  @Squid-Beast
+
+# The daemon that decides when to enter and when to exit. Holds the approval
+# boundary: manage() must never wait for a human, execute() must always.
+# Non-negotiables #1, #3.
+/app/service.py                   @Squid-Beast
+
+# Every threshold in the system lives in config, and nowhere else. Editing a
+# number here is indistinguishable in effort from a typo and identical in effect
+# to rewriting the risk engine.
+# Non-negotiables #2, #4.
+/config.yaml                      @Squid-Beast
+/config-small.yaml                @Squid-Beast
+
+# The rules themselves. If these can be edited without review, every rule above
+# is editable without review by first editing this file.
+/.claude/rules/non-negotiables.md @Squid-Beast
+
+# The pipeline, including the guards and this file. A PR that weakens a money
+# path plus a PR that disables the check that would have caught it is the same
+# PR. Owning .github/ means the second half cannot land quietly.
+/.github/                         @Squid-Beast

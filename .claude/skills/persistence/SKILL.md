@@ -19,7 +19,7 @@ If it does not, stop — the instrument is broken and its output would be worthl
 Then run the real thing (default 100 traders; budget is the whole free tier):
 
 ```bash
-FOMO_API_KEY must be set in the environment
+set -a; . ./.env; set +a          # nothing in Python loads .env; docker does it via env_file
 python run_persistence.py --traders ${traders:-100} --calls-per-trader 10
 ```
 
