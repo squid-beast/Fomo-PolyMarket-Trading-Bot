@@ -15,6 +15,11 @@ jobs:
   secrets-scan:
     name: Secret scan
     runs-on: ubuntu-latest
+    # gitleaks-action lists the PR's commits, which the workflow-level
+    # contents: read does not cover. Granted per-job, not workflow-wide.
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }

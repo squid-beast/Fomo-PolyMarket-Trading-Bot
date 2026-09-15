@@ -263,7 +263,10 @@ def build_state() -> dict:
 
     return {
         "generated": now.isoformat(),
-        "mode": "unknown",
+        # Configured mode, from this process's LIVE_TRADING. Not daemon-verified —
+        # that distinction lives in configuration.verified_execution_mode, which
+        # stays None. Withholding it entirely hid LIVE from the dashboard.
+        "mode": "live" if LIVE else "paper",
         **workspace_metadata(),
         "heartbeat_sec": heartbeat,
         "chain": chain,
