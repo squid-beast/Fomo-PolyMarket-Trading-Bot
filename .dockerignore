@@ -1,0 +1,7 @@
+.env
+data/
+*.db
+.fomo_cache/
+__pycache__/
+*.pyc
+dashboard.html

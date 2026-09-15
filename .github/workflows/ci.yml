@@ -1,0 +1,203 @@
+name: CI
+
+on:
+  push: { branches: [main, develop] }
+  pull_request: { branches: [main] }
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secrets-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  guard:
+    name: Repo guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: No secrets or runtime state committed
+        run: |
+          set -e
+          fail() { echo "::error::$1"; exit 1; }
+          git ls-files | grep -E '(^|/)\.env($|\.)' | grep -v '\.env\.example$' \
+            && fail ".env file committed" || true
+          git ls-files | grep -E '\.(pem|key|p12|keystore)$' && fail "key material committed" || true
+          git ls-files | grep -E '\.db$'                     && fail "database committed" || true
+          git ls-files | grep -E '^data/'                    && fail "runtime data committed" || true
+          echo "clean"
+
+      - name: No build output or dependencies committed
+        run: |
+          set -e
+          git ls-files | grep -E '^web/static/' && { echo "::error::build output committed — web/static is generated"; exit 1; } || true
+          git ls-files | grep -E 'node_modules/' && { echo "::error::node_modules committed"; exit 1; } || true
+          echo "clean"
+
+      # Regression guard. Git does NOT support trailing comments in .gitignore:
+      # `web/static/   # build output` becomes the literal pattern and silently
+      # matches nothing. This shipped once already.
+      - name: .gitignore has no trailing comments
+        run: |
+          set -e
+          if grep -nE '^[^#!].*[^[:space:]][[:space:]]+#' .gitignore; then
+            echo "::error::the lines above have trailing comments — git treats the whole line as the pattern, so they match nothing. Put comments on their own line."
+            exit 1
+          fi
+          echo "no broken patterns"
+
+      - name: Every .gitignore pattern actually matches something it should
+        run: |
+          set -e
+          for p in .env data/x.db web/static/index.html node_modules/x .venv/bin/python secret.pem docs/NOTES.md; do
+            mkdir -p "$(dirname "$p")" 2>/dev/null || true
+            if ! git check-ignore -q "$p"; then
+              echo "::error::$p is NOT ignored but should be"; exit 1
+            fi
+          done
+          echo "all protected paths verified ignored"
+
+      - name: LIVE_TRADING must ship disabled
+        run: |
+          set -e
+          grep -q '^LIVE_TRADING=false' .env.example \
+            || { echo "::error::.env.example must ship LIVE_TRADING=false"; exit 1; }
+          echo "safe default confirmed"
+
+      # The chain verifier is O(n) with a SHA256 per row. Calling it on the SSE
+      # path saturated the loop once; verify_from() with a checkpoint is the
+      # supported way to monitor it live.
+      - name: No full-chain verify() on the streaming path
+        run: |
+          set -e
+          if grep -nE '\.verify\(\)' web/server.py; then
+            echo "::error::web/server.py calls the O(n) verify(). Use verify_from(seq, hash) with a checkpoint."
+            exit 1
+          fi
+          echo "hot path clean"
+
+      # The README advertised 18 gates while safety.py had 21. A number in a
+      # README that nothing checks drifts silently; this pins it to the code.
+      - name: README gate count matches ct/safety.py
+        run: |
+          set -e
+          ACTUAL=$(grep -c 'r\.append(' ct/safety.py)
+          CLAIMED=$(grep -oE '[0-9]+ hard gates' README.md | grep -oE '^[0-9]+')
+          if [ "$ACTUAL" != "$CLAIMED" ]; then
+            echo "::error::README says $CLAIMED hard gates, ct/safety.py has $ACTUAL reject conditions"
+            exit 1
+          fi
+          echo "$ACTUAL gates, documented correctly"
+
+  test:
+    name: Python tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11', cache: pip }
+      - run: pip install -r requirements.txt pytest
+
+      - name: Scenario suite
+        run: python -m pytest tests/ -v --tb=short
+
+      - name: Engine self-checks
+        run: |
+          python simulate.py | tee /tmp/sim.log
+          grep -q "25/25 checks passed" /tmp/sim.log \
+            || { echo "::error::engine self-checks did not all pass"; exit 1; }
+
+      - name: Ledger is tamper-evident and incremental verify agrees
+        run: |
+          python - <<'PY'
+          from ct.ledger import Ledger
+          L = Ledger("/tmp/ci.db", "paper")
+          for i in range(5000):
+              L.record("entry_filled", symbol=f"S{i}", qty=i, ok=1)
+
+          full = L.verify()
+          assert full["ok"], full
+          chk = L.verify_from(0, "0" * 64)
+          assert chk["ok"] and chk["tip"] == full["tip"], "incremental disagrees with full"
+
+          # an edit must break BOTH
+          L.db.execute("UPDATE ledger SET net_usd=999 WHERE seq=2500"); L.db.commit()
+          assert L.verify()["ok"] is False, "full verify missed an edit"
+          assert L.verify_from(0, "0" * 64)["ok"] is False, "incremental missed an edit"
+          print(f"chain verified over {full['entries']} entries; tampering detected by both paths")
+          PY
+
+      - name: Web API imports and builds a payload
+        run: |
+          python - <<'PY'
+          import os, sys
+          os.environ.update(DB_FILE="/tmp/w.db", LEDGER_FILE="/tmp/wl.db", STATE_FILE="/tmp/ws.json")
+          from ct.store import Store; from ct.ledger import Ledger
+          Store("/tmp/w.db"); Ledger("/tmp/wl.db", "paper")
+          open("/tmp/ws.json","w").write('{"cash":1000.0,"positions":[]}')
+          sys.path.insert(0, "web")
+          import server
+          s = server.build_state()
+          for k in ("mode","chain","equity","proposals","edge_gate_on","friction_example"):
+              assert k in s, f"payload missing {k}"
+          assert s["mode"] == "paper"
+          print("payload keys ok:", len(s), "fields")
+          PY
+
+  ui:
+    name: UI typecheck and build
+    runs-on: ubuntu-latest
+    defaults:
+      run: { working-directory: web/ui }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm, cache-dependency-path: web/ui/package-lock.json }
+      - run: npm install --no-audit --no-fund
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Build
+        run: npm run build
+      - name: Build produced the expected output
+        run: |
+          set -e
+          test -f ../static/index.html || { echo "::error::no index.html emitted"; exit 1; }
+          ls ../static/assets/*.js  >/dev/null || { echo "::error::no JS bundle emitted"; exit 1; }
+          ls ../static/assets/*.css >/dev/null || { echo "::error::no CSS emitted"; exit 1; }
+          echo "bundle $(du -h ../static/assets/*.js | cut -f1)"
+
+  build:
+    name: Docker image
+    runs-on: ubuntu-latest
+    needs: [test, ui, guard, secrets-scan]
+    steps:
+      - uses: actions/checkout@v4
+      - name: "Build (multi-stage: node builds the UI, python runs the service)"
+        run: docker build -t copytrader:${{ github.sha }} .
+
+      - name: Container must not run as root
+        run: |
+          U=$(docker run --rm copytrader:${{ github.sha }} id -u)
+          [ "$U" != "0" ] || { echo "::error::container runs as root"; exit 1; }
+          echo "runs as uid $U"
+
+      - name: Image imports cleanly and carries the built UI
+        run: |
+          set -e
+          docker run --rm copytrader:${{ github.sha }} python -c "import app.service, audit, ct.ledger; print('imports ok')"
+          docker run --rm copytrader:${{ github.sha }} sh -c \
+            'test -f web/static/index.html && ls web/static/assets/*.js >/dev/null' \
+            || { echo "::error::UI missing from image — multi-stage copy failed"; exit 1; }
+          echo "UI present in image"

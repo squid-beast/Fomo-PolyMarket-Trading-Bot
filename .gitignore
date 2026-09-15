@@ -1,0 +1,51 @@
+# ── secrets: never commit ───────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.keystore
+secrets/
+
+# ── runtime state & data ────────────────────────────────────────────
+data/
+*.db
+*.db-journal
+*.csv
+state.json
+dashboard.html
+paths/
+.fomo_cache/
+
+# ── internal docs: strategy, research, infra notes ──────────────────
+# Kept out of the public repo. CLAUDE.md and .claude/ stay tracked —
+# they carry the safety rules and no secrets.
+docs/
+research/fitted_exits.json
+
+# ── python ──────────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── node / ui ───────────────────────────────────────────────────────
+node_modules/
+dist/
+.next/
+# vite build output — rebuilt by `npm run build` or Docker
+web/static/
+*.tsbuildinfo
+
+# ── editor / os ─────────────────────────────────────────────────────
+.DS_Store
+.idea/
+*.swp
+.claude/settings.local.json
+CLAUDE.local.md

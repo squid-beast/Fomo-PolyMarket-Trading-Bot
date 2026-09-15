@@ -1,0 +1,94 @@
+name: Deploy to VPS
+
+# Manual only, and it refuses without an explicit confirmation. Shipping code
+# that can move money should never be a side effect of pushing a commit.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type DEPLOY to confirm'
+        required: true
+        default: 'dry-run'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false      # never interrupt a deploy mid-flight
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production      # add a required reviewer on this in repo settings
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require explicit confirmation
+        run: |
+          [ "${{ github.event.inputs.confirm }}" = "DEPLOY" ] || {
+            echo "::error::confirmation not given — nothing deployed"; exit 1; }
+
+      - name: SSH key
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          echo "${{ secrets.VPS_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+
+      - name: Deploy, verify, roll back on failure
+        env:
+          H: ${{ secrets.VPS_HOST }}
+          U: ${{ secrets.VPS_USER }}
+        run: |
+          ssh -o StrictHostKeyChecking=yes "$U@$H" bash -euo pipefail <<'REMOTE'
+            cd ~/copytrader
+            PREV=$(git rev-parse HEAD)
+            echo "current revision: $PREV"
+
+            # Back up the audit ledger BEFORE touching anything, and verify the
+            # backup reads — a backup that has never been restored is not one.
+            ts=$(date -u +%Y%m%dT%H%M%SZ)
+            mkdir -p ~/backups && chmod 700 ~/backups
+            if [ -f data/ledger.db ]; then
+              sqlite3 data/ledger.db ".backup '$HOME/backups/ledger-$ts.db'" \
+                || cp -a data/ledger.db "$HOME/backups/ledger-$ts.db"
+            fi
+
+            rollback() {
+              echo "::error::$1 — rolling back to $PREV"
+              git reset --hard "$PREV"
+              docker compose up -d --build
+              exit 1
+            }
+
+            git fetch --all && git reset --hard origin/main
+            # --build runs the multi-stage image: node builds the UI, python runs the service
+            docker compose up -d --build
+
+            sleep 30
+
+            # both services must be up; the UI is how you see what the daemon is doing
+            for svc in trader ui; do
+              state=$(docker compose ps --format '{{.Service}} {{.State}}' | awk -v s="$svc" '$1==s{print $2}')
+              [ "$state" = "running" ] || rollback "service '$svc' is '$state', not running"
+            done
+
+            # the audit chain must still verify after the new code touches it
+            docker compose exec -T trader python audit.py verify | grep -q "CHAIN INTACT" \
+              || rollback "ledger failed verification after deploy"
+
+            # the control panel must actually serve, not just be 'running'
+            docker compose exec -T ui python -c "
+            import urllib.request, json, sys
+            d = json.load(urllib.request.urlopen('http://127.0.0.1:8787/api/state', timeout=10))
+            assert 'equity' in d and 'mode' in d, 'unexpected payload'
+            print('UI responding, mode =', d['mode'])
+            " || rollback "control panel did not answer /api/state"
+
+            echo "deploy ok — $(git rev-parse --short HEAD)"
+          REMOTE
+
+      - name: Summary
+        if: always()
+        run: echo "Deployed ${{ github.sha }} · run ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY

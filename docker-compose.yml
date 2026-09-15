@@ -1,0 +1,32 @@
+services:
+  trader:
+    build: .
+    container_name: copytrader
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/data
+      - ./config.yaml:/app/config.yaml:ro   # edit risk limits without rebuilding
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+    # the daemon makes only outbound HTTPS; it exposes no ports at all
+
+  ui:
+    build: .
+    container_name: copytrader-ui
+    restart: unless-stopped
+    env_file: .env
+    command: ["python", "web/server.py"]
+    environment:
+      UI_HOST: "0.0.0.0"          # inside the container only
+      UI_PORT: "8787"
+    ports:
+      - "127.0.0.1:8787:8787"     # loopback ONLY — tunnel in, never expose
+    volumes:
+      - ./data:/data
+      - ./config.yaml:/app/config.yaml:ro
+    depends_on: [trader]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }

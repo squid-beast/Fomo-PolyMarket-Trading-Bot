@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Bash(python -m pytest*)",
+      "Bash(python simulate.py)",
+      "Bash(python scan.py)",
+      "Bash(python audit.py*)",
+      "Bash(python dashboard.py*)",
+      "Bash(python research/*)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git add*)",
+      "Bash(docker compose logs*)",
+      "Bash(docker compose ps*)",
+      "Bash(ls*)",
+      "Bash(cat*)"
+    ],
+    "deny": [
+      "Bash(rm -rf*)",
+      "Bash(sudo*)",
+      "Bash(git push --force*)",
+      "Bash(docker compose down*)",
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Edit(./.env)",
+      "Edit(./.env.*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": ".claude/hooks/guard-commit.sh" }
+        ]
+      }
+    ]
+  }
+}

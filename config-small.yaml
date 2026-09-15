@@ -1,0 +1,77 @@
+run:
+  chain: solana
+  scan_interval_sec: 300
+  manage_interval_sec: 15
+  max_candidates_per_scan: 400
+  _cadence_note: "manage_interval_sec drives how fast a stop loss can react. At 6\
+    \ open positions, 15s costs 24 req/min against a 280/min limiter \u2014 comfortable,\
+    \ and 4x faster to react than the old 60s."
+portfolio:
+  starting_equity_usd: 100.0
+  base_currency: USD
+costs:
+  platform_fee_pct: 0.5
+  pool_fee_pct: 1.0
+  fixed_tx_cost_usd: 0.04
+  failed_tx_rate: 0.08
+  adverse_move_bps: 30
+  stop_loss_extra_slip_bps: 150
+safety:
+  min_liquidity_usd: 25000
+  max_liquidity_usd: 50000000
+  min_pair_age_minutes: 45
+  max_pair_age_days: 365
+  min_volume_h24_usd: 50000
+  max_vol_to_liq_ratio: 60.0
+  min_vol_to_liq_ratio: 0.35
+  min_txns_h1: 25
+  max_fdv_to_liq_ratio: 250.0
+  min_buy_ratio_h1: 0.35
+  max_buy_ratio_h1: 0.88
+  blocked_symbols: []
+  max_pct_off_1h_high: 25.0
+  max_top10_holder_pct: 25.0
+  require_verified: false
+  block_ticker_collisions: true
+  min_holders: 150
+  max_sell_buy_ratio_h1: 1.35
+risk:
+  max_position_pct: 20.0
+  max_token_exposure_pct: 20.0
+  max_total_exposure_pct: 75.0
+  max_concurrent_positions: 3
+  max_daily_loss_pct: 10.0
+  min_position_usd: 15.0
+  cooldown_minutes_after_exit: 240
+  max_entries_per_day: 4
+  min_cash_reserve_pct: 25.0
+  min_expected_edge_pct: 1.5
+  require_edge_gate: true
+exits:
+  stop_loss_pct: 12.0
+  take_profit_pct: 25.0
+  trailing_stop_pct: 10.0
+  trail_arm_pct: 15.0
+  max_hold_hours: 24
+  liquidity_collapse_pct: 40.0
+  _research_note: These values are NOT fitted. Fitting on 17 real token paths found
+    every combination loses money because the entry signal has no edge (see research/FINDINGS.md).
+    Do not treat them as optimised.
+  scale_out_ladder:
+  - - 50
+    - 0.25
+  - - 120
+    - 0.25
+strategies:
+  min_composite_score: 62
+  min_strategies_agreeing: 2
+  weights:
+    momentum: 1.0
+    volume_surge: 1.0
+    liquidity_quality: 1.0
+_profile_note: 'SMALL ACCOUNT PROFILE ($100). Honest warning: at this size you cannot
+  diversify. 20% per position is 10x the 2% used at $1000+, because below ~$15 fixed
+  transaction costs dominate and below 3 positions there is no spread at all. One
+  bad trade costs a fifth of the account; three in a row costs half. This profile
+  makes a small account OPERABLE, not safe. The risk of ruin is real and is the price
+  of trading at this size.'

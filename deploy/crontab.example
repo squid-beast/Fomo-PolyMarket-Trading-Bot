@@ -1,0 +1,8 @@
+# copytrader — add with: crontab -e
+# ledger backup, hourly, verified
+17 * * * * cd $HOME/copytrader && bash deploy/backup.sh >> $HOME/backups/backup.log 2>&1
+# health check, every 15 minutes
+*/15 * * * * cd $HOME/copytrader && bash deploy/healthcheck.sh >> $HOME/backups/health.log 2>&1
+# daily proof snapshot: verify chain + export closed lots
+30 0 * * * cd $HOME/copytrader && docker compose exec -T trader python audit.py verify >> $HOME/backups/proof.log 2>&1
+35 0 * * * cd $HOME/copytrader && docker compose exec -T trader python audit.py export /data/trades.csv >> $HOME/backups/proof.log 2>&1
