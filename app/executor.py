@@ -144,16 +144,39 @@ class JupiterExecutor:
             "jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
             "params": [payload, {"encoding": "base64", "skipPreflight": False,
                                  "maxRetries": 3, "preflightCommitment": "confirmed"}]})
-        d = r.json()
+        try:
+            d = r.json()
+        except ValueError:
+            # Non-JSON body (gateway HTML, truncated response). Raising keeps it
+            # inside the callers' ExecutionError handling instead of escaping as
+            # a raw JSONDecodeError, same reason as the parse/sign guard above.
+            raise ExecutionError(f"send returned non-JSON {r.status_code}: {r.text[:180]}")
         if "error" in d:
             raise ExecutionError(f"send failed: {str(d['error'])[:200]}")
-        return d.get("result", "")
+        sig = d.get("result")
+        if not isinstance(sig, str) or not sig.strip():
+            # A 200 with no "error" and no usable "result" is an UNKNOWN send, not
+            # a successful one: the transaction may or may not be on the chain and
+            # we have no signature to ever find out. Raising (rather than returning
+            # "") is deliberate — callers in app/service.py turn ExecutionError into
+            # a recorded failure with position_still_open=True, which is the only
+            # honest outcome. Returning "" instead would send confirm() off to poll
+            # a signature that does not exist for 40s before reaching the same
+            # verdict, and would leave an empty signature in the ledger row.
+            raise ExecutionError(f"send returned no signature: {str(d)[:200]}")
+        return sig.strip()
 
     def confirm(self, signature: str, tries: int = 20, delay: float = 2.0) -> bool:
         """A swap is not done until the chain says so. Never assume a send landed."""
         import time
-        if self.dry_run or not signature or signature == "DRY_RUN_NOT_SENT":
-            return True
+        if self.dry_run:
+            return True                        # nothing was ever sent
+        if not signature or signature == "DRY_RUN_NOT_SENT":
+            # LIVE with nothing to poll. This used to return True, reporting a send
+            # nobody can verify as confirmed (non-negotiable #7). Unknown is not
+            # confirmed — belt to sign_and_send's braces, for any caller that hands
+            # us a signature from somewhere else.
+            return False
         for _ in range(tries):
             r = self.s.post(self.rpc, timeout=self.timeout, json={
                 "jsonrpc": "2.0", "id": 1, "method": "getSignatureStatuses",
