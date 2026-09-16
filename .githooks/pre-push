@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Refuse a direct push to main. Everything goes through a pull request so CI runs.
+#
+# HONEST LIMITS: this is a LOCAL hook. It is not branch protection. It does not
+# run on anyone else's clone, and --no-verify walks straight past it. It stops
+# the accidental 3am push, which is the realistic failure, not a determined one.
+# Server-side enforcement needs GitHub Pro on a private repo. Until then this is
+# the only thing standing here.
+set -uo pipefail
+
+PROTECTED="main"
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  case "$remote_ref" in
+    "refs/heads/$PROTECTED")
+      # QUOTED delimiter: this block must never be expanded by the shell. An
+      # unquoted one ran the example command via backticks, so the hook pushed
+      # instead of blocking. Do not unquote it.
+      cat >&2 <<'MSG'
+
+  Refusing to push directly to main.
+
+  This repository trades real money. Every change goes through a pull request
+  so the pipeline runs: secret scan, repo guards, the scenario suite,
+  simulate.py, the UI build and the Docker image.
+
+    git switch -c feat/your-change
+    git push -u origin feat/your-change
+    gh pr create
+
+  To bypass deliberately: git push --no-verify (you are on your own).
+
+MSG
+      exit 1
+      ;;
+  esac
+done
+exit 0

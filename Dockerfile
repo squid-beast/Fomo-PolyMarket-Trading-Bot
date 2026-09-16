@@ -22,7 +22,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY ct/ ./ct/
 COPY app/ ./app/
-COPY web/server.py ./web/
+# server.py imports web/history.py at module level, so both must ship
+COPY web/*.py ./web/
 COPY --from=ui /static ./web/static
 COPY config.yaml dashboard.py scan.py audit.py ./
 

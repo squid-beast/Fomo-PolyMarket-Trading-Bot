@@ -1,67 +1,44 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { State, ConnStatus } from "./types";
 
-/**
- * Subscribes to the server's SSE feed.
- *
- * The server only emits when the daemon actually wrote something (it watches
- * SQLite's data_version), so this is push, not polling — roughly 90ms from
- * write to render instead of the 5s a timer gave us.
- *
- * EventSource reconnects on its own with backoff. We surface the connection
- * state rather than hiding it: a dashboard that silently shows stale numbers
- * while disconnected is worse than one that admits it.
- */
 export function useLiveState() {
   const [state, setState] = useState<State | null>(null);
   const [status, setStatus] = useState<ConnStatus>("connecting");
-  const [lastEventAt, setLastEventAt] = useState<number>(0);
-  const esRef = useRef<EventSource | null>(null);
-
+  const [lastEventAt, setLastEventAt] = useState(0);
+  const [attempt, setAttempt] = useState(0);
+  const lastRef = useRef(0);
   useEffect(() => {
     let cancelled = false;
-
-    const connect = () => {
+    setStatus("connecting");
+    lastRef.current = Date.now();
+    const es = new EventSource("/api/stream");
+    es.addEventListener("state", (event) => {
       if (cancelled) return;
-      const es = new EventSource("/api/stream");
-      esRef.current = es;
-
-      es.addEventListener("state", (ev) => {
-        if (cancelled) return;
-        try {
-          setState(JSON.parse((ev as MessageEvent).data) as State);
-          setLastEventAt(Date.now());
-          setStatus("live");
-        } catch {
-          /* a malformed frame should not tear down the stream */
-        }
-      });
-
-      es.onerror = () => {
-        if (cancelled) return;
-        // EventSource retries by itself; reflect that rather than reconnecting
-        // manually, which would fight its backoff.
-        setStatus("retrying");
-      };
-    };
-
-    connect();
-    return () => {
-      cancelled = true;
-      esRef.current?.close();
-    };
-  }, []);
-
-  /** Optimistically drop a decided proposal so the card disappears instantly. */
+      try {
+        const next = JSON.parse((event as MessageEvent).data) as State;
+        if (!next.configuration || !next.integrations) throw new Error("Unsupported state response");
+        lastRef.current = Date.now();
+        setState(next);
+        setLastEventAt(lastRef.current);
+        setStatus("live");
+      } catch { setStatus("retrying"); }
+    });
+    es.onerror = () => { if (!cancelled) setStatus("retrying"); };
+    // A silent socket must not keep showing a connected state indefinitely.
+    const timer = window.setInterval(() => {
+      if (Date.now() - lastRef.current > 45000) setStatus("retrying");
+    }, 5000);
+    return () => { cancelled = true; es.close(); window.clearInterval(timer); };
+  }, [attempt]);
+  const retry = useCallback(() => setAttempt(n => n + 1), []);
   const decide = useCallback(async (pid: string, action: "approve" | "reject") => {
-    setState((s) => s ? { ...s, proposals: s.proposals.filter((p) => p.pid !== pid) } : s);
-    const res = await fetch(`/api/proposals/${pid}/${action}`, { method: "POST" });
+    const res = await fetch(`/api/proposals/${encodeURIComponent(pid)}/${action}`, { method: "POST" });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      throw new Error(body.detail ?? `HTTP ${res.status}`);
+      throw new Error(typeof body.detail === "string" ? body.detail : `Decision failed (HTTP ${res.status}).`);
     }
-    // the daemon's write triggers a push that reconciles the real state
+    // Retain the proposal and its error when a request fails or conflicts.
+    setState(s => s ? { ...s, proposals: s.proposals.filter(p => p.pid !== pid) } : s);
   }, []);
-
-  return { state, status, lastEventAt, decide };
+  return { state, status, lastEventAt, decide, retry };
 }

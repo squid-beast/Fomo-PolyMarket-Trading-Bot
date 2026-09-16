@@ -1,25 +1,10 @@
 import type { Equity } from "../types";
-import { money, pct, signClass } from "../format";
-
-export function Tiles({ e }: { e: Equity }) {
-  const tiles: [string, string, string, string][] = [
-    ["Equity", money(e.equity), `from ${money(e.starting)}`, signClass(e.equity - e.starting)],
-    ["Return", pct(e.return_pct), "net of all costs", signClass(e.return_pct)],
-    ["Cash", money(e.cash), e.cash <= 0 ? "no room to act" : "available", e.cash <= 0 ? "neg" : ""],
-    ["Open", String(e.open), "positions", ""],
-    ["Closed", String(e.trades), e.trades ? `${e.wins}W / ${e.trades - e.wins}L` : "none yet", ""],
-    ["Costs paid", e.trades ? money(e.costs) : "—",
-      e.cost_drag != null ? `${e.cost_drag}% of gross` : "no trades", e.costs ? "neg" : ""],
-  ];
-  return (
-    <div className="tiles">
-      {tiles.map(([k, v, n, c]) => (
-        <div className="tile" key={k}>
-          <div className="k">{k}</div>
-          <div className={`v ${c}`}>{v}</div>
-          <div className="n">{n}</div>
-        </div>
-      ))}
-    </div>
-  );
+import { money } from "../format";
+export function Tiles({ e }: { e: Equity | undefined }) {
+  return <div className="account-stats">
+    <div className="main-stat"><span>Recorded equity</span><strong>{money(e?.equity)}</strong><small>Local snapshot · mode unknown</small></div>
+    <div><span>Recorded cash</span><strong>{money(e?.cash)}</strong><small>Balance not reconciled to FOMO</small></div>
+    <div><span>Open positions</span><strong>{e?.open ?? "—"}</strong><small>From the local snapshot</small></div>
+    <div><span>Account net P&L</span><strong>—</strong><small>Requires verified account mode</small></div>
+  </div>;
 }
