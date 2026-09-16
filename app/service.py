@@ -194,7 +194,36 @@ class Service:
             sig = ""
             if self.live:
                 try:
-                    res = self.ex.swap(token, SOL_MINT, int(pos.qty), self.slippage_bps,
+                    # Jupiter's `amount` is ATOMIC units; pos.qty is a UI amount and
+                    # nothing here tracks decimals, so int(pos.qty) sold ~nothing (and
+                    # 0 for any qty < 1). Ask the chain instead: the raw balance is
+                    # both the right unit and the truer number.
+                    #
+                    # WHEN THE WALLET HOLDS MORE THAN THE POSITION: sell only the
+                    # tracked position, not the whole balance. A surplus means tokens
+                    # this position never bought — a manual buy in the fomo app, or an
+                    # earlier partial exit — and a stop firing here is no mandate to
+                    # liquidate those. Selling too little is recoverable (reconcile
+                    # flags it, the next pass exits it); selling someone's untracked
+                    # bag is not. When the wallet holds LESS, min() sells what is
+                    # actually there rather than a swap that would fail anyway.
+                    amounts = self.wallet.token_amounts(self.ex.pubkey)
+                    bal = (amounts or {}).get(token)   # not `held`: that is hold-hours above
+                    # int() floors, so any float imprecision in the cap leaves dust
+                    # behind rather than over-selling. Wrong direction is the safe one.
+                    raw = min(bal["raw"], int(pos.qty * 10 ** bal["decimals"])) if bal else 0
+                    if raw <= 0:
+                        why = ("no_raw_balance: wallet RPC did not answer" if amounts is None
+                               else "no_raw_balance: wallet holds none of this mint")
+                        self.notif.alert("⚠️ EXIT NOT SENT", f"{pos.symbol}: {why}")
+                        self.log(f"EXIT NOT SENT {pos.symbol}: {why}")
+                        # Fail closed: never guess a size. STILL HOLDING.
+                        self.ledger.record("exit_failed", symbol=pos.symbol, token=token,
+                                           qty=pos.qty, price=price, ok=0,
+                                           attempted_reason=reason, error=why,
+                                           position_still_open=True)
+                        continue
+                    res = self.ex.swap(token, SOL_MINT, raw, self.slippage_bps,
                                        max(self.max_impact, 10.0))  # exits get a wider cap: getting out matters more
                     sig = res.get("signature", "")
                     if not res.get("ok"):

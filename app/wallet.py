@@ -31,20 +31,40 @@ class Wallet:
         except (TypeError, KeyError):
             return 0.0
 
-    def token_balances(self, pubkey: str) -> dict[str, float]:
-        """{mint: ui_amount} for every non-zero SPL balance."""
+    def token_amounts(self, pubkey: str) -> dict[str, dict] | None:
+        """
+        {mint: {"raw": int, "decimals": int, "ui": float}} per mint held.
+
+        `raw` is the ATOMIC on-chain amount — the unit Jupiter's `amount` takes.
+        The RPC sends it as a string and it stays an int all the way through:
+        putting it through a float is the precision bug this exists to avoid.
+
+        None means the RPC did not answer — UNKNOWN, which is NOT "holds
+        nothing". Anything about to spend money must fail closed on None.
+        """
         r = self._rpc("getTokenAccountsByOwner",
                       [pubkey, {"programId": TOKEN_PROGRAM}, {"encoding": "jsonParsed"}])
-        out: dict[str, float] = {}
-        for acc in (r or {}).get("value", []) or []:
+        if not isinstance(r, dict):
+            return None
+        out: dict[str, dict] = {}
+        for acc in r.get("value", []) or []:
             try:
                 info = acc["account"]["data"]["parsed"]["info"]
-                amt = float(info["tokenAmount"]["uiAmount"] or 0)
-                if amt > 0:
-                    out[info["mint"]] = out.get(info["mint"], 0.0) + amt
+                ta = info["tokenAmount"]
+                raw, dec = int(ta["amount"]), int(ta["decimals"])
+                ui = float(ta["uiAmount"] or 0)
+                mint = info["mint"]
             except (KeyError, TypeError, ValueError):
                 continue
+            e = out.setdefault(mint, {"raw": 0, "decimals": dec, "ui": 0.0})
+            e["raw"] += raw          # one owner can hold several accounts per mint
+            e["ui"] += ui
         return out
+
+    def token_balances(self, pubkey: str) -> dict[str, float]:
+        """{mint: ui_amount} for every non-zero SPL balance."""
+        return {m: a["ui"] for m, a in (self.token_amounts(pubkey) or {}).items()
+                if a["ui"] > 0}
 
     def reconcile(self, expected: dict[str, float], pubkey: str,
                   tolerance: float = 0.02) -> list[str]:
