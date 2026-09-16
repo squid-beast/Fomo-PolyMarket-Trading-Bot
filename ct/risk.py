@@ -80,8 +80,22 @@ class RiskEngine:
         if size < self.min_position_usd:
             reasons.append(f"position_below_floor(${size:.2f}<${self.min_position_usd:.2f})")
 
+        # --- liquidity must be KNOWN before anything downstream ---------
+        # DexScreener returns 0.0 when it has no liquidity.usd at all (see
+        # ct/datasource._f), and a malformed value can arrive as NaN. Both the
+        # friction gate and the edge gate below need a real pool size, so
+        # without one they used to be SKIPPED — which let the pairs we know
+        # least about return approved=True. ct/safety.py rejects thin pools in
+        # the scan path, but the risk engine is a hard gate on its own
+        # (non-negotiables #1). Missing data is a reason to refuse, never a
+        # reason to skip a gate. `not liq > 0` (rather than `liq <= 0`) is
+        # deliberate: it also catches NaN.
+        liq = pair.liquidity_usd
+        if not isinstance(liq, (int, float)) or not liq > 0:
+            reasons.append(f"no_liquidity_data(liquidity_usd={liq!r})")
+
         # --- friction sanity: never enter a trade the costs eat --------
-        if size > 0 and pair.liquidity_usd > 0:
+        elif size > 0:
             rt = cost_model.round_trip_pct(size, pair.liquidity_usd)
             if rt > 8.0:
                 reasons.append(f"friction_too_high({rt:.1f}%_round_trip)")
