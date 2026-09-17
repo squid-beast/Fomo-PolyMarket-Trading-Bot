@@ -278,3 +278,40 @@ def test_the_deep_surcharge_cannot_push_spend_past_the_budget(make_client):
     except BudgetExceeded:
         pass
     assert c.spent <= c.budget
+
+
+# --- trade_return must read the shape the provider actually sends -----------
+# This bug was invisible to every other test in this file: CLOSED_ROW existed in
+# the documented shape and was exercised through fetch_trades, but nothing ever
+# put it through trade_return. run_persistence.py keeps a trader only when >=20
+# rows parse, so returning None for all of them silently dropped EVERY trader —
+# after spending the credits — and reported it as "not enough usable traders".
+
+def test_trade_return_reads_the_documented_provider_shape():
+    r = fomo_client.trade_return(CLOSED_ROW)
+    assert r is not None, "documented row did not parse; every trader would be dropped"
+    expected = CLOSED_ROW["avgExitPrice"] / CLOSED_ROW["avgEntryPrice"] - 1.0
+    assert r == pytest.approx(expected, rel=1e-9)
+    assert r < 0, "this fixture is a loss; a parser that reports a gain is worse than one that fails"
+
+
+def test_trade_return_still_reads_the_older_spellings():
+    """Additive fix: the legacy keys some responses use must keep working."""
+    assert fomo_client.trade_return(
+        {"entryPrice": 0.000012, "exitPrice": 0.000015}) == pytest.approx(0.25)
+    assert fomo_client.trade_return(
+        {"realizedPnlUsd": 3.0, "costUsd": 12.0}) == pytest.approx(0.25)
+
+
+def test_trade_return_stays_none_when_it_genuinely_cannot_tell():
+    """Inventing a return is far worse than discarding the row."""
+    for junk in ({}, {"foo": 1}, {"avgEntryPrice": 0}, {"realizedPnlUsd": 3.0},
+                 {"amount": 0, "avgEntryPrice": 0.001}):
+        assert fomo_client.trade_return(junk) is None, junk
+
+
+def test_a_full_page_of_documented_rows_clears_the_min_trades_gate():
+    """run_persistence.py:66 needs >=20 parsed rows before it keeps a trader."""
+    rows = [dict(CLOSED_ROW, tradeId=f"t{i}") for i in range(25)]
+    parsed = [x for x in (fomo_client.trade_return(r) for r in rows) if x is not None]
+    assert len(parsed) == 25, f"only {len(parsed)}/25 parsed — the trader is dropped"
