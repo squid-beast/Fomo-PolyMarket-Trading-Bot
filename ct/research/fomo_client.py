@@ -331,7 +331,8 @@ def trade_return(t: dict) -> float | None:
         if isinstance(v, (int, float)):
             return v / 100.0 if abs(v) > 3 else float(v)
     # entry/exit prices
-    e, x = t.get("entryPrice") or t.get("avgEntry"), t.get("exitPrice") or t.get("avgExit")
+    e = t.get("entryPrice") or t.get("avgEntry") or t.get("avgEntryPrice")
+    x = t.get("exitPrice") or t.get("avgExit") or t.get("avgExitPrice")
     try:
         if e and x and float(e) > 0:
             return float(x) / float(e) - 1.0
@@ -339,7 +340,16 @@ def trade_return(t: dict) -> float | None:
         pass
     # realized pnl over cost basis
     pnl = t.get("realizedPnlUsd") or t.get("pnlUsd") or t.get("realizedPnl")
-    cost = t.get("costUsd") or t.get("investedUsd") or t.get("costBasisUsd") or t.get("volumeUsd")
+    cost = (t.get("costUsd") or t.get("investedUsd") or t.get("costBasisUsd")
+            or t.get("volumeUsd") or t.get("costBasis"))
+    # Last resort: amount * avg entry. Only valid when both are present and the
+    # row is a closed trade, otherwise it silently invents a cost basis.
+    if not cost and e:
+        try:
+            amt = float(t.get("amount") or 0)
+            cost = amt * float(e) if amt > 0 else None
+        except (TypeError, ValueError):
+            cost = None
     try:
         if pnl is not None and cost and float(cost) > 0:
             return float(pnl) / float(cost)
